@@ -26,12 +26,17 @@ func (b *boolValue) IsBoolFlag() bool {
 }
 
 func flagBoolEnv(name, env, usage string) *bool {
+	var b bool
+	flagBoolEnvVar(&b, name, env, usage)
+	return &b
+}
+
+func flagBoolEnvVar(p *bool, name, env, usage string) {
 	s := os.Getenv(env)
-	var val boolValue
+	val := (*boolValue)(p)
 	// Set fails, but env has any value, then set to true.
 	if err := val.Set(s); err != nil {
-		val = s != ""
+		*val = s != ""
 	}
-	flag.Var(&val, name, usage)
-	return (*bool)(&val)
+	flag.Var(val, name, usage)
 }
