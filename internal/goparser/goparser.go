@@ -30,6 +30,8 @@ type Result struct {
 type Parser struct {
 	// The importer to resolve packages from import paths.
 	Importer types.Importer
+
+	UseTestOnlyPackage bool
 }
 
 // Parse parses a given Go file at srcPath, along any files that share the same
@@ -48,14 +50,18 @@ func (p *Parser) Parse(srcPath string, files []models.Path) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	pkgName := f.Name.String()
 	return &Result{
 		Header: &models.Header{
 			Comments: parsePkgComment(f, f.Package),
-			Package:  f.Name.String(),
-			Imports:  parseImports(f.Imports),
-			Code:     goCode(b, f),
+			Package: &models.Package{
+				Name:     pkgName,
+				TestOnly: p.UseTestOnlyPackage,
+			},
+			Imports: parseImports(f.Imports),
+			Code:    goCode(b, f),
 		},
-		Funcs: p.parseFunctions(fset, f, fs),
+		Funcs: p.parseFunctions(fset, f, fs, pkgName),
 	}, nil
 }
 
@@ -94,7 +100,7 @@ func (p *Parser) parseFiles(fset *token.FileSet, f *ast.File, files []models.Pat
 	return fs, nil
 }
 
-func (p *Parser) parseFunctions(fset *token.FileSet, f *ast.File, fs []*ast.File) []*models.Function {
+func (p *Parser) parseFunctions(fset *token.FileSet, f *ast.File, fs []*ast.File, pkgName string) []*models.Function {
 	ul, el := p.parseTypes(fset, fs)
 	var funcs []*models.Function
 	for _, d := range f.Decls {
@@ -102,7 +108,7 @@ func (p *Parser) parseFunctions(fset *token.FileSet, f *ast.File, fs []*ast.File
 		if !ok {
 			continue
 		}
-		funcs = append(funcs, parseFunc(fDecl, ul, el))
+		funcs = append(funcs, parseFunc(fDecl, ul, el, pkgName, p.UseTestOnlyPackage))
 	}
 	return funcs
 }
@@ -177,14 +183,16 @@ func goCode(b []byte, f *ast.File) []byte {
 	return b[furthestPos:]
 }
 
-func parseFunc(fDecl *ast.FuncDecl, ul map[string]types.Type, el map[*types.Struct]ast.Expr) *models.Function {
+func parseFunc(fDecl *ast.FuncDecl, ul map[string]types.Type, el map[*types.Struct]ast.Expr, pkgName string, testOnlyPackage bool) *models.Function {
 	f := &models.Function{
-		Name:       fDecl.Name.String(),
-		IsExported: fDecl.Name.IsExported(),
-		Receiver:   parseReceiver(fDecl.Recv, ul, el),
-		Parameters: parseFieldList(fDecl.Type.Params, ul),
+		NonQualifiedName: fDecl.Name.String(),
+		IsExported:       fDecl.Name.IsExported(),
+		Receiver:         parseReceiver(fDecl.Recv, ul, el, pkgName, testOnlyPackage),
+		Parameters:       parseFieldList(fDecl.Type.Params, ul, pkgName, testOnlyPackage),
+		TestOnlyPackage:  testOnlyPackage,
+		Package:          pkgName,
 	}
-	fs := parseFieldList(fDecl.Type.Results, ul)
+	fs := parseFieldList(fDecl.Type.Results, ul, pkgName, testOnlyPackage)
 	i := 0
 	for _, fi := range fs {
 		if fi.Type.String() == "error" {
@@ -213,14 +221,14 @@ func parseImports(imps []*ast.ImportSpec) []*models.Import {
 	return is
 }
 
-func parseReceiver(fl *ast.FieldList, ul map[string]types.Type, el map[*types.Struct]ast.Expr) *models.Receiver {
+func parseReceiver(fl *ast.FieldList, ul map[string]types.Type, el map[*types.Struct]ast.Expr, pkgName string, testOnlyPackage bool) *models.Receiver {
 	if fl == nil {
 		return nil
 	}
 	r := &models.Receiver{
-		Field: parseFieldList(fl, ul)[0],
+		Field: parseFieldList(fl, ul, pkgName, testOnlyPackage)[0],
 	}
-	t, ok := ul[r.Type.Value]
+	t, ok := ul[r.Type.NonQualifiedValue]
 	if !ok {
 		return r
 	}
@@ -232,7 +240,7 @@ func parseReceiver(fl *ast.FieldList, ul map[string]types.Type, el map[*types.St
 	if !found {
 		return r
 	}
-	r.Fields = append(r.Fields, parseFieldList(st.(*ast.StructType).Fields, ul)...)
+	r.Fields = append(r.Fields, parseFieldList(st.(*ast.StructType).Fields, ul, pkgName, testOnlyPackage)...)
 	for i, f := range r.Fields {
 		// https://github.com/cweill/gotests/issues/69
 		if i >= s.NumFields() {
@@ -244,14 +252,14 @@ func parseReceiver(fl *ast.FieldList, ul map[string]types.Type, el map[*types.St
 
 }
 
-func parseFieldList(fl *ast.FieldList, ul map[string]types.Type) []*models.Field {
+func parseFieldList(fl *ast.FieldList, ul map[string]types.Type, pkgName string, testOnlyPackage bool) []*models.Field {
 	if fl == nil {
 		return nil
 	}
 	i := 0
 	var fs []*models.Field
 	for _, f := range fl.List {
-		for _, pf := range parseFields(f, ul) {
+		for _, pf := range parseFields(f, ul, pkgName, testOnlyPackage) {
 			pf.Index = i
 			fs = append(fs, pf)
 			i++
@@ -260,8 +268,8 @@ func parseFieldList(fl *ast.FieldList, ul map[string]types.Type) []*models.Field
 	return fs
 }
 
-func parseFields(f *ast.Field, ul map[string]types.Type) []*models.Field {
-	t := parseExpr(f.Type, ul)
+func parseFields(f *ast.Field, ul map[string]types.Type, pkgName string, testOnlyPackage bool) []*models.Field {
+	t := parseExpr(f.Type, ul, pkgName, testOnlyPackage)
 	if len(f.Names) == 0 {
 		return []*models.Field{{
 			Type: t,
@@ -277,29 +285,35 @@ func parseFields(f *ast.Field, ul map[string]types.Type) []*models.Field {
 	return fs
 }
 
-func parseExpr(e ast.Expr, ul map[string]types.Type) *models.Expression {
+func parseExpr(e ast.Expr, ul map[string]types.Type, pkgName string, testOnlyPackage bool) *models.Expression {
 	switch v := e.(type) {
 	case *ast.StarExpr:
 		val := types.ExprString(v.X)
 		return &models.Expression{
-			Value:      val,
-			IsStar:     true,
-			Underlying: underlying(val, ul),
+			NonQualifiedValue: val,
+			IsStar:            true,
+			Underlying:        underlying(val, ul),
+			TestOnlyPackage:   testOnlyPackage,
+			Package:           pkgName,
 		}
 	case *ast.Ellipsis:
-		exp := parseExpr(v.Elt, ul)
+		exp := parseExpr(v.Elt, ul, pkgName, testOnlyPackage)
 		return &models.Expression{
-			Value:      exp.Value,
-			IsStar:     exp.IsStar,
-			IsVariadic: true,
-			Underlying: underlying(exp.Value, ul),
+			NonQualifiedValue: exp.NonQualifiedValue,
+			IsStar:            exp.IsStar,
+			IsVariadic:        true,
+			Underlying:        underlying(exp.NonQualifiedValue, ul),
+			TestOnlyPackage:   exp.TestOnlyPackage,
+			Package:           exp.Package,
 		}
 	default:
 		val := types.ExprString(e)
 		return &models.Expression{
-			Value:      val,
-			Underlying: underlying(val, ul),
-			IsWriter:   val == "io.Writer",
+			NonQualifiedValue: val,
+			Underlying:        underlying(val, ul),
+			IsWriter:          val == "io.Writer",
+			TestOnlyPackage:   testOnlyPackage,
+			Package:           pkgName,
 		}
 	}
 }

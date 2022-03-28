@@ -14,14 +14,15 @@ import (
 )
 
 type Options struct {
-	PrintInputs    bool
-	Subtests       bool
-	Parallel       bool
-	Named          bool
-	Template       string
-	TemplateDir    string
-	TemplateParams map[string]interface{}
-	TemplateData   [][]byte
+	PrintInputs     bool
+	Subtests        bool
+	Parallel        bool
+	Named           bool
+	TestOnlyPackage bool
+	Template        string
+	TemplateDir     string
+	TemplateParams  map[string]interface{}
+	TemplateData    [][]byte
 
 	render *render.Render
 }

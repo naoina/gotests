@@ -32,6 +32,7 @@ type Options struct {
 	Parallel           bool     // Print tests that runs the subtests in parallel.
 	Named              bool     // Create Map instead of slice
 	WriteOutput        bool     // Write output to test file(s).
+	TestOnlyPackage    bool     // Use *_test package
 	Template           string   // Name of custom template set
 	TemplateDir        string   // Path to custom template set
 	TemplateParamsPath string   // Path to custom parameters json file(s).
@@ -91,17 +92,18 @@ func parseOptions(out io.Writer, opt *Options) *gotests.Options {
 	}
 
 	return &gotests.Options{
-		Only:           onlyRE,
-		Exclude:        exclRE,
-		Exported:       opt.ExportedFuncs,
-		PrintInputs:    opt.PrintInputs,
-		Subtests:       opt.Subtests,
-		Parallel:       opt.Parallel,
-		Named:          opt.Named,
-		Template:       opt.Template,
-		TemplateDir:    opt.TemplateDir,
-		TemplateParams: templateParams,
-		TemplateData:   opt.TemplateData,
+		Only:            onlyRE,
+		Exclude:         exclRE,
+		Exported:        opt.ExportedFuncs,
+		PrintInputs:     opt.PrintInputs,
+		Subtests:        opt.Subtests,
+		Parallel:        opt.Parallel,
+		Named:           opt.Named,
+		TestOnlyPackage: opt.TestOnlyPackage,
+		Template:        opt.Template,
+		TemplateDir:     opt.TemplateDir,
+		TemplateParams:  templateParams,
+		TemplateData:    opt.TemplateData,
 	}
 }
 

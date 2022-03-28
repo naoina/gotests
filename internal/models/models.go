@@ -6,15 +6,36 @@ import (
 )
 
 type Expression struct {
-	Value      string
-	IsStar     bool
-	IsVariadic bool
-	IsWriter   bool
-	Underlying string
+	NonQualifiedValue string
+	IsStar            bool
+	IsVariadic        bool
+	IsWriter          bool
+	TestOnlyPackage   bool
+	Underlying        string
+	Package           string
+}
+
+func (e *Expression) IsBasicType() bool {
+	return isBasicType(e.NonQualifiedValue) || isBasicType(e.Underlying)
+}
+
+func (e *Expression) IsWellKnownType() bool {
+	return e.IsBasicType() || isWellKnownType(e.NonQualifiedValue) || isWellKnownType(e.Underlying)
+}
+
+func (e *Expression) HasPackagePath() bool {
+	return strings.Contains(e.NonQualifiedValue, ".")
+}
+
+func (e *Expression) Value() string {
+	if e.TestOnlyPackage && !e.IsWellKnownType() && !e.HasPackagePath() {
+		return e.Package + "." + e.NonQualifiedValue
+	}
+	return e.NonQualifiedValue
 }
 
 func (e *Expression) String() string {
-	value := e.Value
+	value := e.Value()
 	if e.IsStar {
 		value = "*" + value
 	}
@@ -39,7 +60,7 @@ func (f *Field) IsStruct() bool {
 }
 
 func (f *Field) IsBasicType() bool {
-	return isBasicType(f.Type.String()) || isBasicType(f.Type.Underlying)
+	return f.Type.IsBasicType()
 }
 
 func isBasicType(t string) bool {
@@ -53,12 +74,21 @@ func isBasicType(t string) bool {
 	}
 }
 
+func isWellKnownType(t string) bool {
+	switch t {
+	case "error", "[]byte", "interface{}", "any":
+		return true
+	default:
+		return false
+	}
+}
+
 func (f *Field) IsNamed() bool {
 	return f.Name != "" && f.Name != "_"
 }
 
 func (f *Field) ShortName() string {
-	return strings.ToLower(string([]rune(f.Type.Value)[0]))
+	return strings.ToLower(string([]rune(f.Type.NonQualifiedValue)[0]))
 }
 
 type Receiver struct {
@@ -66,13 +96,33 @@ type Receiver struct {
 	Fields []*Field
 }
 
+func (r *Receiver) Name() string {
+	var n string
+	if r.IsNamed() {
+		n = r.Field.Name
+	} else {
+		n = r.ShortName()
+	}
+	if n == "name" {
+		// Avoid conflict with test struct's "name" field.
+		n = "n"
+	} else if n == "t" {
+		// Avoid conflict with test argument.
+		// "tr" is short for t receiver.
+		n = "tr"
+	}
+	return n
+}
+
 type Function struct {
-	Name         string
-	IsExported   bool
-	Receiver     *Receiver
-	Parameters   []*Field
-	Results      []*Field
-	ReturnsError bool
+	NonQualifiedName string
+	IsExported       bool
+	Receiver         *Receiver
+	Parameters       []*Field
+	Results          []*Field
+	ReturnsError     bool
+	TestOnlyPackage  bool
+	Package          string
 }
 
 func (f *Function) TestParameters() []*Field {
@@ -96,9 +146,9 @@ func (f *Function) TestResults() []*Field {
 		ps = append(ps, &Field{
 			Name: p.Name,
 			Type: &Expression{
-				Value:      "string",
-				IsWriter:   true,
-				Underlying: "string",
+				NonQualifiedValue: "string",
+				IsWriter:          true,
+				Underlying:        "string",
 			},
 			Index: len(ps),
 		})
@@ -121,39 +171,68 @@ func (f *Function) OnlyReturnsError() bool {
 func (f *Function) FullName() string {
 	var r string
 	if f.Receiver != nil {
-		r = f.Receiver.Type.Value
+		r = f.Receiver.Type.NonQualifiedValue
 	}
-	return strings.Title(r) + strings.Title(f.Name)
+	return strings.Title(r) + strings.Title(f.NonQualifiedName)
 }
 
 func (f *Function) TestName() string {
-	if strings.HasPrefix(f.Name, "Test") {
-		return f.Name
+	if strings.HasPrefix(f.NonQualifiedName, "Test") {
+		return f.NonQualifiedName
 	}
 	if f.Receiver != nil {
-		receiverType := f.Receiver.Type.Value
+		receiverType := f.Receiver.Type.NonQualifiedValue
 		if unicode.IsLower([]rune(receiverType)[0]) {
 			receiverType = "_" + receiverType
 		}
-		return "Test" + receiverType + "_" + f.Name
+		return "Test" + receiverType + "_" + f.NonQualifiedName
 	}
-	if unicode.IsLower([]rune(f.Name)[0]) {
-		return "Test_" + f.Name
+	if unicode.IsLower([]rune(f.NonQualifiedName)[0]) {
+		return "Test_" + f.NonQualifiedName
 	}
-	return "Test" + f.Name
+	return "Test" + f.NonQualifiedName
 }
 
 func (f *Function) IsNaked() bool {
 	return f.Receiver == nil && len(f.Parameters) == 0 && len(f.Results) == 0
 }
 
+func (f *Function) Name() string {
+	if f.Receiver != nil {
+		return f.Receiver.Name() + "." + f.NonQualifiedName
+	}
+	if f.TestOnlyPackage && f.Package != "" {
+		return f.Package + "." + f.NonQualifiedName
+	}
+	return f.NonQualifiedName
+}
+
 type Import struct {
 	Name, Path string
 }
 
+type Package struct {
+	Name     string
+	TestOnly bool
+}
+
+func (p *Package) TestOnlyName() string {
+	if strings.HasSuffix(p.Name, "_test") {
+		return p.Name
+	}
+	return p.Name + "_test"
+}
+
+func (p *Package) String() string {
+	if p.TestOnly {
+		return p.TestOnlyName()
+	}
+	return p.Name
+}
+
 type Header struct {
 	Comments []string
-	Package  string
+	Package  *Package
 	Imports  []*Import
 	Code     []byte
 }

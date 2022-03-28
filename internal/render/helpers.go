@@ -21,21 +21,7 @@ func fieldName(f *models.Field) string {
 }
 
 func receiverName(f *models.Receiver) string {
-	var n string
-	if f.IsNamed() {
-		n = f.Name
-	} else {
-		n = f.ShortName()
-	}
-	if n == "name" {
-		// Avoid conflict with test struct's "name" field.
-		n = "n"
-	} else if n == "t" {
-		// Avoid conflict with test argument.
-		// "tr" is short for t receiver.
-		n = "tr"
-	}
-	return n
+	return f.Name()
 }
 
 func parameterName(f *models.Field) string {

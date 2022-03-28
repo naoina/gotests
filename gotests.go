@@ -18,18 +18,19 @@ import (
 
 // Options provides custom filters and parameters for generating tests.
 type Options struct {
-	Only           *regexp.Regexp         // Includes only functions that match.
-	Exclude        *regexp.Regexp         // Excludes functions that match.
-	Exported       bool                   // Include only exported methods
-	PrintInputs    bool                   // Print function parameters in error messages
-	Subtests       bool                   // Print tests using Go 1.7 subtests
-	Parallel       bool                   // Print tests that runs the subtests in parallel.
-	Named          bool                   // Create Map instead of slice
-	Importer       func() types.Importer  // A custom importer.
-	Template       string                 // Name of custom template set
-	TemplateDir    string                 // Path to custom template set
-	TemplateParams map[string]interface{} // Custom external parameters
-	TemplateData   [][]byte               // Data slice for templates
+	Only            *regexp.Regexp         // Includes only functions that match.
+	Exclude         *regexp.Regexp         // Excludes functions that match.
+	Exported        bool                   // Include only exported methods
+	PrintInputs     bool                   // Print function parameters in error messages
+	Subtests        bool                   // Print tests using Go 1.7 subtests
+	Parallel        bool                   // Print tests that runs the subtests in parallel.
+	Named           bool                   // Create Map instead of slice
+	TestOnlyPackage bool                   // Use *_test package
+	Importer        func() types.Importer  // A custom importer.
+	Template        string                 // Name of custom template set
+	TemplateDir     string                 // Path to custom template set
+	TemplateParams  map[string]interface{} // Custom external parameters
+	TemplateData    [][]byte               // Data slice for templates
 }
 
 // A GeneratedTest contains information about a test file with generated tests.
@@ -103,7 +104,10 @@ func readResults(rs <-chan *result) ([]*GeneratedTest, error) {
 }
 
 func generateTest(src models.Path, files []models.Path, opt *Options) (*GeneratedTest, error) {
-	p := &goparser.Parser{Importer: opt.Importer()}
+	p := &goparser.Parser{
+		Importer:           opt.Importer(),
+		UseTestOnlyPackage: opt.TestOnlyPackage,
+	}
 	sr, err := p.Parse(string(src), files)
 	if err != nil {
 		return nil, fmt.Errorf("Parser.Parse source file: %v", err)
@@ -121,14 +125,15 @@ func generateTest(src models.Path, files []models.Path, opt *Options) (*Generate
 	}
 
 	options := output.Options{
-		PrintInputs:    opt.PrintInputs,
-		Subtests:       opt.Subtests,
-		Parallel:       opt.Parallel,
-		Named:          opt.Named,
-		Template:       opt.Template,
-		TemplateDir:    opt.TemplateDir,
-		TemplateParams: opt.TemplateParams,
-		TemplateData:   opt.TemplateData,
+		PrintInputs:     opt.PrintInputs,
+		Subtests:        opt.Subtests,
+		Parallel:        opt.Parallel,
+		Named:           opt.Named,
+		TestOnlyPackage: opt.TestOnlyPackage,
+		Template:        opt.Template,
+		TemplateDir:     opt.TemplateDir,
+		TemplateParams:  opt.TemplateParams,
+		TemplateData:    opt.TemplateData,
 	}
 
 	b, err := options.Process(h, funcs)
@@ -156,7 +161,7 @@ func parseTestFile(p *goparser.Parser, testPath string, h *models.Header) (*mode
 	}
 	var testFuncs []string
 	for _, fun := range tr.Funcs {
-		testFuncs = append(testFuncs, fun.Name)
+		testFuncs = append(testFuncs, fun.NonQualifiedName)
 	}
 	tr.Header.Imports = append(tr.Header.Imports, h.Imports...)
 	h = tr.Header
@@ -176,7 +181,7 @@ func testableFuncs(funcs []*models.Function, only, excl *regexp.Regexp, exp bool
 }
 
 func isInvalid(f *models.Function) bool {
-	if f.Name == "init" && f.IsNaked() {
+	if f.NonQualifiedName == "init" && f.IsNaked() {
 		return true
 	}
 	return false
@@ -187,7 +192,7 @@ func isTestFunction(f *models.Function, testFuncs []string) bool {
 }
 
 func isExcluded(f *models.Function, excl *regexp.Regexp) bool {
-	return excl != nil && (excl.MatchString(f.Name) || excl.MatchString(f.FullName()))
+	return excl != nil && (excl.MatchString(f.NonQualifiedName) || excl.MatchString(f.FullName()))
 }
 
 func isUnexported(f *models.Function, exp bool) bool {
@@ -195,7 +200,7 @@ func isUnexported(f *models.Function, exp bool) bool {
 }
 
 func isIncluded(f *models.Function, only *regexp.Regexp) bool {
-	return only == nil || only.MatchString(f.Name) || only.MatchString(f.FullName())
+	return only == nil || only.MatchString(f.NonQualifiedName) || only.MatchString(f.FullName())
 }
 
 func contains(ss []string, s string) bool {
