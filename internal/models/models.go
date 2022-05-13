@@ -29,7 +29,12 @@ func (e *Expression) HasPackagePath() bool {
 
 func (e *Expression) Value() string {
 	if e.TestOnlyPackage && !e.IsWellKnownType() && !e.HasPackagePath() {
-		return e.Package + "." + e.NonQualifiedValue
+		value := e.NonQualifiedValue
+		// treat slice w/ or w/o star like []*Something.
+		if i := strings.LastIndexAny(value, "]*"); i >= 0 {
+			return value[:i+1] + e.Package + "." + value[i+1:]
+		}
+		return e.Package + "." + value
 	}
 	return e.NonQualifiedValue
 }
